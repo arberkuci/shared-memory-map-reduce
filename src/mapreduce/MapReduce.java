@@ -1,23 +1,27 @@
 package mapreduce;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.stream.IntStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
 import mapreduce.mapper.MapperTask;
 import mapreduce.mapper.MapperFunc;
 import mapreduce.datasource.FileDataSource;
 import mapreduce.datasource.DataSource;
 import mapreduce.reducer.ReducerFunc;
 import mapreduce.reducer.ReducerTask;
-import mapreduce.util.Tuple;
+import mapreduce.shuffler.Shuffler;
 
 import java.io.IOException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 
 import static mapreduce.util.Constants.THREAD_COUNT;
 
@@ -27,7 +31,7 @@ public class MapReduce<K, V, InterKey, InterVal, OutKey, OutVal> {
     private MapperFunc<K, V, InterKey, InterVal> mapperFunc;
     private ReducerFunc<InterKey, InterVal, OutKey, OutVal> reducerFunc;
     private ExecutorService executorService;
-    private List<List<Tuple<OutKey, OutVal>>> finalOutput;
+    private List<List<Entry<OutKey, OutVal>>> finalOutput;
 
     public MapReduce() {
         this.executorService = Executors.newCachedThreadPool();
@@ -51,78 +55,51 @@ public class MapReduce<K, V, InterKey, InterVal, OutKey, OutVal> {
         this.reducerFunc = reducerFunc;
     }
 
-    public void compute() throws Exception {
-        long start = System.currentTimeMillis();
+    public List<Entry<OutKey, OutVal>> compute() throws Exception {
         Objects.requireNonNull(dataSource);
         Objects.requireNonNull(mapperFunc);
-
+        Objects.requireNonNull(reducerFunc);
         //Split phase
-        List<Tuple<K, V>> dataSplits = dataSource.read();
+        Map<K, V> dataSets = dataSource.read();
 
-        //Mapper phase.
-        var mapperTasks = new ArrayList<Future<List<Tuple<InterKey, InterVal>>>>();
-        dataSplits.forEach(dataSplit -> mapperTasks.add(executorService.submit(createMapperTask(dataSplit))));
-        var mapPhaseOutputs = new ArrayList<List<Tuple<InterKey, InterVal>>>();
-        for (var mapperRes : mapperTasks) mapPhaseOutputs.add(mapperRes.get());
+        //Mapping phase.
+        var mapperTaskFutures = new ArrayList<Future<List<Entry<InterKey, InterVal>>>>();
+        dataSets.forEach((id, dataset) -> mapperTaskFutures.add(executorService.submit(new MapperTask<>(mapperFunc, id, dataset))));
+        //Shuffle data as they are processed by mapping phase.
+        ConcurrentMap<InterKey, List<InterVal>> shuffledData = new ConcurrentHashMap<>();
+        CountDownLatch countDownLatch = new CountDownLatch(mapperTaskFutures.size());
+        for (var mapperRes : mapperTaskFutures)
+            executorService.submit(new Shuffler<>(shuffledData, mapperRes.get(), countDownLatch));
 
-        //Shuffle phase
-        Shuffler shuffler = new Shuffler(mapPhaseOutputs, reducerFunc).shuffleData();
-        List<ReducerTask<InterKey, InterVal, OutKey, OutVal>> reducerTasks = shuffler.createReducerTasks();
+        //Wait until all shufflers, shuffle their data.
+        countDownLatch.await();
+
+        //Create reducer tasks.
+        List<ReducerTask<InterKey, InterVal, OutKey, OutVal>> reducerTasks = createReducerTasks(shuffledData);
 
         //Reduce phase
-        var allReducersResults = new ArrayList<Future<List<Tuple<OutKey, OutVal>>>>();
+        var allReducersResults = new ArrayList<Future<List<Entry<OutKey, OutVal>>>>();
         reducerTasks.forEach(reducer -> allReducersResults.add(executorService.submit(reducer)));
-        for (Future<List<Tuple<OutKey, OutVal>>> reducer : allReducersResults) finalOutput.add(reducer.get());
+        for (Future<List<Entry<OutKey, OutVal>>> reducer : allReducersResults) finalOutput.add(reducer.get());
+
         executorService.shutdown();
+        return this.collectOutput();
     }
 
-    public List<Tuple<OutKey, OutVal>> collectOutput() {
-        var joinedOutput = new ArrayList<Tuple<OutKey, OutVal>>();
+    private List<ReducerTask<InterKey, InterVal, OutKey, OutVal>> createReducerTasks(ConcurrentMap<InterKey, List<InterVal>> groupedData) {
+        var reducerTasks = new ArrayList<ReducerTask<InterKey, InterVal, OutKey, OutVal>>();
+        IntStream.range(0, THREAD_COUNT).forEach((i) -> reducerTasks.add(new ReducerTask<>(reducerFunc)));
+        groupedData.keySet().forEach((interKey) -> {
+            int reducerTaskPos = Math.abs(interKey.hashCode() % THREAD_COUNT);
+            reducerTasks.get(reducerTaskPos).insertEntry(Map.entry(interKey, groupedData.get(interKey)));
+        });
+        return reducerTasks;
+    }
+
+    private List<Entry<OutKey, OutVal>> collectOutput() {
+        var joinedOutput = new ArrayList<Entry<OutKey, OutVal>>();
         finalOutput.forEach(list -> joinedOutput.addAll(list));
         return joinedOutput;
-    }
-
-    private MapperTask<K, V, InterKey, InterVal> createMapperTask(Tuple<K, V> dataSplit) {
-        return new MapperTask<>(mapperFunc, dataSplit);
-    }
-
-    private class Shuffler {
-
-        private List<List<Tuple<InterKey, InterVal>>> data;
-        private ReducerFunc<InterKey, InterVal, OutKey, OutVal> reducerFunc;
-        private Map<InterKey, List<InterVal>> helperMap;
-
-        public Shuffler(List<List<Tuple<InterKey, InterVal>>> data, ReducerFunc<InterKey, InterVal, OutKey, OutVal> reducerFunc) {
-            this.data = data;
-            this.reducerFunc = reducerFunc;
-            this.helperMap = new HashMap<>();
-        }
-
-        public Shuffler shuffleData() {
-            data.forEach(list -> list.forEach(tuple -> {
-                InterKey key = tuple.getKey();
-                InterVal value = tuple.getValue();
-                if (helperMap.containsKey(key)) {
-                    helperMap.get(key).add(value);
-                } else {
-                    var newList = new ArrayList<InterVal>();
-                    newList.add(value);
-                    helperMap.put(key, newList);
-                }
-            }));
-            return this;
-        }
-
-        public List<ReducerTask<InterKey, InterVal, OutKey, OutVal>> createReducerTasks() {
-            var reducerTasks = new ArrayList<ReducerTask<InterKey, InterVal, OutKey, OutVal>>();
-            IntStream.range(0, THREAD_COUNT).forEach((i) -> reducerTasks.add(new ReducerTask<>(reducerFunc)));
-            helperMap.keySet().stream().forEach((interKey) -> {
-                int reducerTaskPos = Math.abs(interKey.hashCode() % THREAD_COUNT);
-                reducerTasks.get(reducerTaskPos).insertTuple(new Tuple<>(interKey, helperMap.get(interKey)));
-            });
-            return reducerTasks;
-        }
-
     }
 
 }

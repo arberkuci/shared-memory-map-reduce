@@ -1,11 +1,9 @@
 package mapreduce.datasource;
 
-import mapreduce.util.Tuple;
-
-import java.util.List;
+import java.util.Map;
 
 public abstract class DataSource<K, V> {
 
-    public abstract List<Tuple<K, V>> read();
+    public abstract Map<K, V> read();
 
 }

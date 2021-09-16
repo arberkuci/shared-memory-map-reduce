@@ -1,23 +1,24 @@
 package mapreduce.mapper;
 
-import mapreduce.util.Tuple;
-
+import java.util.Map.Entry;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-public class MapperTask<InKey, InVal, OutKey, OutVal> implements Callable<List<Tuple<OutKey, OutVal>>> {
+public class MapperTask<InKey, InVal, OutKey, OutVal> implements Callable<List<Entry<OutKey, OutVal>>> {
 
     private MapperFunc<InKey, InVal, OutKey, OutVal> mapper;
-    private Tuple<InKey, InVal> data;
+    private InKey inputKey;
+    private InVal inputValue;
 
-    public MapperTask(MapperFunc<InKey, InVal, OutKey, OutVal> mapper, Tuple<InKey, InVal> data) {
+    public MapperTask(MapperFunc<InKey, InVal, OutKey, OutVal> mapper, InKey inputKey, InVal inputValue) {
         this.mapper = mapper;
-        this.data = data;
+        this.inputKey = inputKey;
+        this.inputValue = inputValue;
     }
 
     @Override
-    public List<Tuple<OutKey, OutVal>> call() throws Exception {
-        return mapper.map(data.getKey(), data.getValue());
+    public List<Entry<OutKey, OutVal>> call() throws Exception {
+        return mapper.map(inputKey, inputValue);
     }
 
 }

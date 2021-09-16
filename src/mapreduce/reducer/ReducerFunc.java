@@ -1,10 +1,11 @@
 package mapreduce.reducer;
 
 import java.util.List;
-import mapreduce.util.Tuple;
+import java.util.Map.Entry;
 
+@FunctionalInterface
 public interface ReducerFunc<K, V, OutKey, OutVal> {
 
-    public Tuple<OutKey, OutVal> reduce(K key, List<V> value);
+    public Entry<OutKey, OutVal> reduce(K key, List<V> value);
 
 }
