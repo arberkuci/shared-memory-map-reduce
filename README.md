@@ -2,20 +2,18 @@
 
 This is a multi-core/shared-memory implementation of the very well-known programming model called MapReduce.
 [MapReduce](https://storage.googleapis.com/pub-tools-public-publication-data/pdf/16cb30b4b92fd4989b8619a61752a2387c6dd474.pdf)
-was widely popularized in the 2000s by a paper that was written by some engineers at Google. This paper also inspired
+was widely popularized in the 2000s by a paper that was written by engineers at Google. This paper also inspired
 the widely used open-source framework [Hadoop](http://hadoop.apache.org/) for implementing distributed processing of
 large amounts of data. The paper introduced a novel approach to compute large amounts of data (in terms of petabytes) in
 a scalable and resilient manner.
 
-In this project, the MapReduce programming model is implemented, in the context of multi-core computers. A fixed set
-of (a cached pool of) threads, created and managed by the environment is used to run the various taks of the
-computation.
+In this project, the MapReduce programming model is implemented, in the context of multi-core computers.
 
 This particular implementation goes through the following phases:
 
 1. **Loading/Splitting data phase**: This is the initial phase, where the data are loaded in memory. It goes through the
    following two steps:
-    1. Reading the data from a specified source. The source of you data can either be:
+    1. Reading the data from a specified source. The source of the data can be one of the following:
         1. From a file. If you want the source of the data to be from a file, use the
            class [FileDataSouce.java](/src/mapreduce/datasource/FileDataSource.java).
         2. Or if your data are not in a file, you can implement the
